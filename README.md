@@ -37,27 +37,14 @@ For a manual full re-sync: `./scripts/sync.py --full -v`
 
 ## Examples
 
-### Recall — natural language prompts
+### Recall — search across past sessions
 
-```
-/claude-warehouse:recall authentication
-```
-> "Have I implemented JWT auth before? Show me what I did."
+You ask Claude something, and Claude uses `recall` to search your history:
 
-```
-/claude-warehouse:recall CORS error
-```
-> "I hit this error last week — how did I fix it?"
-
-```
-/claude-warehouse:recall kafka consumer
-```
-> "Find every session where I worked on Kafka consumers."
-
-```
-/claude-warehouse:recall react table
-```
-> "I built a data table component recently — which project was it?"
+- "Have I implemented JWT auth before?" → Claude runs `/claude-warehouse:recall authentication`
+- "I hit a CORS error last week, how did I fix it?" → Claude runs `/claude-warehouse:recall CORS error`
+- "Which project had the Kafka consumer work?" → Claude runs `/claude-warehouse:recall kafka consumer`
+- "I built a data table component recently, find it" → Claude runs `/claude-warehouse:recall react table`
 
 ### Query — SQL power moves
 
