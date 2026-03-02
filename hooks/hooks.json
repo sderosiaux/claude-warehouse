@@ -8,6 +8,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/sync.py &",
             "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/dashboard.py &",
+            "timeout": 5000
           }
         ]
       }

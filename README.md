@@ -4,7 +4,7 @@
 
 Every session with Claude Code produces knowledge — solutions, debugging paths, architecture decisions, tool patterns. When the session ends, it all evaporates. Git stores *what* changed. Claude Warehouse stores *how you got there*.
 
-It syncs every session into a local DuckDB database. Search it, query it, learn from it. The longer you use it, the more valuable it gets.
+It syncs every session into a local DuckDB database. Search it, query it, visualize it. The longer you use it, the more valuable it gets.
 
 ## Install
 
@@ -18,6 +18,22 @@ That's it. Sync runs automatically at every session start. No config.
 **Prerequisites**: [uv](https://docs.astral.sh/uv/) (DuckDB installs automatically via uv)
 
 ## What You Get
+
+### Dashboard — live analytics at a glance
+
+A visual dashboard auto-launches with every Claude Code session at `http://localhost:3141`.
+
+- Overview cards — sessions, messages, tokens, projects, cost (30d vs prev 30d)
+- Daily activity bar chart (14d)
+- Cost breakdown by project (top 10)
+- Tool distribution donut chart
+- Write/Read ratio trend (weekly)
+- Session efficiency buckets (abandoned → long)
+- First-prompt quality vs. cost
+- Recent sessions table
+- Wrapped card — streak, peak hours, dev type, marathon session
+
+No setup. Refreshes every 60s. Idempotent — starting multiple Claude Code sessions won't crash it.
 
 ### Recall — find what you solved before
 
@@ -61,6 +77,28 @@ Your personal "Claude Code Wrapped": total sessions, tokens consumed, favorite t
 
 Full SQL access to the entire warehouse.
 
+## Architecture
+
+```
+SessionStart hook
+  ├── sync.py &      → incremental ETL into DuckDB
+  └── dashboard.py & → HTTP server on :3141
+
+Browser → localhost:3141
+  ├── GET /              → Chart.js single-page dashboard
+  ├── GET /api/overview  → 30d summary + prev 30d comparison
+  ├── GET /api/costs     → per-project token costs + USD estimates
+  ├── GET /api/tools     → tool usage distribution
+  ├── GET /api/sessions  → recent sessions list
+  ├── GET /api/trends    → daily activity + write/read ratio weekly
+  ├── GET /api/efficiency→ session shape buckets + first-prompt quality
+  └── GET /api/wrapped   → streak, peak hours, marathon, dev type
+```
+
+- **Server**: Python `http.server`, uv inline deps (PEP 723), DuckDB read-only
+- **Frontend**: Single HTML file, Chart.js via CDN, fetch-based, auto-refresh 60s
+- **Port**: 3141, idempotent (skips if already running)
+
 ## Why This Matters
 
 ### The knowledge Git doesn't capture
@@ -98,6 +136,7 @@ Full SQL access to the entire warehouse.
 | Automatic | No | Partial | Fully |
 | Cross-project | No | No | Yes |
 | Token tracking | No | No | Yes |
+| Visual dashboard | No | No | Yes |
 | Compounds over time | No | Slowly | Yes |
 
 ## Query Cookbook

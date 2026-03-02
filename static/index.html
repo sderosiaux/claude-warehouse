@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>claude-warehouse</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #fafafa;
+    --surface: #ffffff;
+    --border: #e5e7eb;
+    --text: #111827;
+    --text-secondary: #6b7280;
+    --accent: #6366f1;
+    --accent-light: #e0e7ff;
+    --green: #10b981;
+    --red: #ef4444;
+    --orange: #f59e0b;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+
+  /* Header */
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 32px; }
+  header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+  header h1 span { color: var(--accent); }
+  .sync-time { font-size: 13px; color: var(--text-secondary); }
+
+  /* Cards grid */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 32px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px; box-shadow: var(--shadow);
+  }
+  .card-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+  .card-value { font-size: 28px; font-weight: 700; margin-top: 4px; letter-spacing: -0.02em; }
+  .card-delta { font-size: 12px; margin-top: 4px; }
+  .card-delta.up { color: var(--green); }
+  .card-delta.down { color: var(--red); }
+
+  /* Chart sections */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  @media (max-width: 800px) { .grid-2 { grid-template-columns: 1fr; } }
+  .section {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px; box-shadow: var(--shadow); margin-bottom: 24px;
+  }
+  .section h2 { font-size: 14px; font-weight: 600; margin-bottom: 16px; color: var(--text-secondary); }
+  .chart-wrap { position: relative; height: 260px; }
+
+  /* Sessions table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 500; color: var(--text-secondary); padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .prompt-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+  .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+
+  /* Wrapped card */
+  .wrapped {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%);
+    border: none; color: white; padding: 32px;
+  }
+  .wrapped h2 { color: rgba(255,255,255,0.8); }
+  .wrapped-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 24px; margin-top: 16px; }
+  .wrapped-item label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
+  .wrapped-item .val { font-size: 24px; font-weight: 700; margin-top: 2px; }
+  .wrapped-item .sub { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+
+  .loading { text-align: center; padding: 40px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1><span>claude</span>-warehouse</h1>
+    <div class="sync-time" id="sync-time"></div>
+  </header>
+
+  <div class="cards" id="overview-cards"><div class="loading">Loading...</div></div>
+
+  <div class="section">
+    <h2>Daily Activity (14d)</h2>
+    <div class="chart-wrap"><canvas id="chart-daily"></canvas></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="section">
+      <h2>Cost by Project (30d)</h2>
+      <div class="chart-wrap"><canvas id="chart-costs"></canvas></div>
+    </div>
+    <div class="section">
+      <h2>Tool Distribution (30d)</h2>
+      <div class="chart-wrap"><canvas id="chart-tools"></canvas></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="section">
+      <h2>Write/Read Ratio (weekly)</h2>
+      <div class="chart-wrap"><canvas id="chart-wr"></canvas></div>
+    </div>
+    <div class="section">
+      <h2>Session Efficiency (30d)</h2>
+      <div class="chart-wrap"><canvas id="chart-efficiency"></canvas></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>First-Prompt Quality (30d)</h2>
+    <div class="chart-wrap" style="height:200px"><canvas id="chart-prompt"></canvas></div>
+  </div>
+
+  <div class="section">
+    <h2>Recent Sessions</h2>
+    <div class="table-wrap"><table id="sessions-table"><tbody><tr><td class="loading">Loading...</td></tr></tbody></table></div>
+  </div>
+
+  <div class="section wrapped" id="wrapped-card">
+    <h2>Your Wrapped</h2>
+    <div class="wrapped-grid" id="wrapped-grid"><div class="loading" style="color:rgba(255,255,255,0.6)">Loading...</div></div>
+  </div>
+</div>
+
+<script>
+const API = '';
+const COLORS = {
+  accent: '#6366f1', accentLight: '#e0e7ff',
+  green: '#10b981', red: '#ef4444', orange: '#f59e0b', blue: '#3b82f6',
+  purple: '#8b5cf6', pink: '#ec4899', teal: '#14b8a6', gray: '#9ca3af',
+};
+const PALETTE = ['#6366f1','#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#6b7280'];
+
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+Chart.defaults.font.size = 12;
+Chart.defaults.color = '#6b7280';
+Chart.defaults.plugins.legend.display = false;
+Chart.defaults.responsive = true;
+Chart.defaults.maintainAspectRatio = false;
+
+function fmt(n) {
+  if (n == null) return '0';
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(0) + 'K';
+  return String(Math.round(n));
+}
+function fmtUsd(n) { return n != null ? '$' + Number(n).toFixed(2) : '$0'; }
+function delta(cur, prev) {
+  if (!prev || prev === 0) return '';
+  const pct = ((cur - prev) / prev * 100).toFixed(0);
+  const cls = pct >= 0 ? 'up' : 'down';
+  const sign = pct >= 0 ? '+' : '';
+  return `<div class="card-delta ${cls}">${sign}${pct}% vs prev 30d</div>`;
+}
+
+async function fetchJSON(path) {
+  const r = await fetch(API + path);
+  const data = await r.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+// ── Overview ──
+async function loadOverview() {
+  const data = await fetchJSON('/api/overview');
+  const cur = data.periods.find(p => p.period === 'last_30d') || {};
+  const prev = data.periods.find(p => p.period === 'prev_30d') || {};
+  if (data.last_sync) {
+    const d = new Date(data.last_sync);
+    document.getElementById('sync-time').textContent = 'Last sync: ' + d.toLocaleString();
+  }
+  document.getElementById('overview-cards').innerHTML = [
+    { label: 'Sessions', val: fmt(cur.sessions), prev: prev.sessions, cur: cur.sessions },
+    { label: 'Messages', val: fmt(cur.messages), prev: prev.messages, cur: cur.messages },
+    { label: 'Tokens', val: fmt(cur.total_tokens), prev: prev.total_tokens, cur: cur.total_tokens },
+    { label: 'Projects', val: cur.projects || 0, prev: prev.projects, cur: cur.projects },
+    { label: 'Est. Cost', val: fmtUsd(cur.est_cost_usd), prev: prev.est_cost_usd, cur: cur.est_cost_usd },
+    { label: 'Avg Msgs/Session', val: cur.avg_msgs || 0 },
+  ].map(c => `<div class="card"><div class="card-label">${c.label}</div><div class="card-value">${c.val}</div>${c.prev != null ? delta(c.cur, c.prev) : ''}</div>`).join('');
+}
+
+// ── Daily Activity ──
+async function loadDaily() {
+  const data = await fetchJSON('/api/trends');
+  new Chart(document.getElementById('chart-daily'), {
+    type: 'bar',
+    data: {
+      labels: data.daily.map(d => { const dt = new Date(d.day); return dt.toLocaleDateString('en-US', {month:'short', day:'numeric'}); }),
+      datasets: [{
+        label: 'Sessions',
+        data: data.daily.map(d => d.sessions),
+        backgroundColor: COLORS.accent,
+        borderRadius: 6, barPercentage: 0.6,
+      }]
+    },
+    options: { scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } }, x: { grid: { display: false } } } }
+  });
+
+  // Write/Read ratio
+  new Chart(document.getElementById('chart-wr'), {
+    type: 'line',
+    data: {
+      labels: data.weekly.map(d => { const dt = new Date(d.week); return dt.toLocaleDateString('en-US', {month:'short', day:'numeric'}); }),
+      datasets: [
+        { label: 'Writes', data: data.weekly.map(d => d.writes), borderColor: COLORS.accent, backgroundColor: COLORS.accentLight, fill: true, tension: 0.3 },
+        { label: 'Reads', data: data.weekly.map(d => d.reads), borderColor: COLORS.blue, backgroundColor: 'transparent', tension: 0.3 },
+      ]
+    },
+    options: {
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12 } } },
+      scales: { y: { beginAtZero: true }, x: { grid: { display: false } } }
+    }
+  });
+}
+
+// ── Costs ──
+async function loadCosts() {
+  const data = await fetchJSON('/api/costs');
+  const short = data.map(d => (d.project_name || '').replace(/^[-.]/, '').slice(0, 20));
+  new Chart(document.getElementById('chart-costs'), {
+    type: 'bar',
+    data: {
+      labels: short,
+      datasets: [{ data: data.map(d => d.est_cost_usd), backgroundColor: PALETTE, borderRadius: 6, barPercentage: 0.7 }]
+    },
+    options: {
+      indexAxis: 'y',
+      scales: { x: { beginAtZero: true, ticks: { callback: v => '$' + v } }, y: { grid: { display: false } } },
+      plugins: { tooltip: { callbacks: { label: ctx => '$' + ctx.raw.toFixed(2) } } }
+    }
+  });
+}
+
+// ── Tools ──
+async function loadTools() {
+  const data = await fetchJSON('/api/tools');
+  new Chart(document.getElementById('chart-tools'), {
+    type: 'doughnut',
+    data: {
+      labels: data.map(d => d.tool_name),
+      datasets: [{ data: data.map(d => d.calls), backgroundColor: PALETTE, borderWidth: 0 }]
+    },
+    options: {
+      cutout: '55%',
+      plugins: {
+        legend: { display: true, position: 'right', labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.raw} (${data[ctx.dataIndex].pct}%)` } }
+      }
+    }
+  });
+}
+
+// ── Efficiency ──
+async function loadEfficiency() {
+  const data = await fetchJSON('/api/efficiency');
+  const bucketColors = { abandoned: COLORS.red, short: COLORS.orange, medium: COLORS.blue, long: COLORS.green };
+  new Chart(document.getElementById('chart-efficiency'), {
+    type: 'bar',
+    data: {
+      labels: data.buckets.map(b => b.bucket),
+      datasets: [{
+        data: data.buckets.map(b => b.sessions),
+        backgroundColor: data.buckets.map(b => bucketColors[b.bucket] || COLORS.gray),
+        borderRadius: 6, barPercentage: 0.6,
+      }]
+    },
+    options: {
+      scales: { y: { beginAtZero: true }, x: { grid: { display: false } } },
+      plugins: { tooltip: { callbacks: { afterLabel: ctx => `Avg ${data.buckets[ctx.dataIndex].avg_msgs} msgs, ${fmt(data.buckets[ctx.dataIndex].avg_tokens)} tokens` } } }
+    }
+  });
+
+  // Prompt quality
+  const pqColors = { short: COLORS.red, medium: COLORS.orange, detailed: COLORS.green };
+  new Chart(document.getElementById('chart-prompt'), {
+    type: 'bar',
+    data: {
+      labels: data.prompt_quality.map(p => p.prompt_length),
+      datasets: [{
+        label: 'Avg Cost ($)',
+        data: data.prompt_quality.map(p => p.avg_cost_usd),
+        backgroundColor: data.prompt_quality.map(p => pqColors[p.prompt_length] || COLORS.gray),
+        borderRadius: 6, barPercentage: 0.5,
+      }]
+    },
+    options: {
+      scales: {
+        y: { beginAtZero: true, ticks: { callback: v => '$' + v } },
+        x: { grid: { display: false } }
+      },
+      plugins: { tooltip: { callbacks: { afterLabel: ctx => {
+        const d = data.prompt_quality[ctx.dataIndex];
+        return `${d.sessions} sessions, avg ${d.avg_msgs} msgs`;
+      }}}}
+    }
+  });
+}
+
+// ── Sessions table ──
+async function loadSessions() {
+  const data = await fetchJSON('/api/sessions');
+  const table = document.getElementById('sessions-table');
+  table.innerHTML = `<thead><tr><th>Date</th><th>Project</th><th>Msgs</th><th>Tokens</th><th>Cost</th><th>Prompt</th></tr></thead><tbody>` +
+    data.map(s => `<tr>
+      <td class="mono">${s.started || ''}</td>
+      <td>${(s.project_name || '').slice(0, 24)}</td>
+      <td>${s.msgs}</td>
+      <td>${fmt(s.tokens)}</td>
+      <td>${fmtUsd(s.est_cost_usd)}</td>
+      <td class="prompt-cell" title="${(s.prompt || '').replace(/"/g, '&quot;')}">${s.prompt || ''}</td>
+    </tr>`).join('') + '</tbody>';
+}
+
+// ── Wrapped ──
+async function loadWrapped() {
+  const data = await fetchJSON('/api/wrapped');
+  const grid = document.getElementById('wrapped-grid');
+  const items = [];
+
+  if (data.alltime) {
+    items.push({ label: 'All-time Sessions', val: fmt(data.alltime.total_sessions), sub: `${fmt(data.alltime.total_messages)} messages` });
+    items.push({ label: 'Total Tokens', val: fmt(data.alltime.total_tokens), sub: `${data.alltime.total_projects} projects` });
+    items.push({ label: 'Total Spend', val: fmtUsd(data.alltime.total_cost_usd), sub: `since ${data.alltime.first_session}` });
+  }
+  if (data.streak) {
+    items.push({ label: 'Longest Streak', val: data.streak.streak_days + ' days', sub: `${data.streak.from_date} → ${data.streak.to_date}` });
+  }
+  if (data.peak_hours && data.peak_hours.length) {
+    const hrs = data.peak_hours.map(h => h.hour + ':00').join(', ');
+    items.push({ label: 'Peak Hours', val: data.peak_hours[0].hour + ':00', sub: hrs });
+  }
+  items.push({ label: 'Your Type', val: data.dev_type, sub: `Top tool: ${data.top_tool}` });
+  if (data.marathon) {
+    items.push({ label: 'Marathon Session', val: data.marathon.msgs + ' msgs', sub: `${data.marathon.project_name} · ${fmtUsd(data.marathon.est_cost_usd)}` });
+  }
+
+  grid.innerHTML = items.map(i => `<div class="wrapped-item"><label>${i.label}</label><div class="val">${i.val}</div><div class="sub">${i.sub || ''}</div></div>`).join('');
+}
+
+// ── Init ──
+function safe(fn) { return fn().catch(() => {}); }
+async function init() {
+  await Promise.all([safe(loadOverview), safe(loadDaily), safe(loadCosts), safe(loadTools), safe(loadEfficiency), safe(loadSessions), safe(loadWrapped)]);
+}
+// Retry initial load after 5s (sync.py may hold DB lock at SessionStart)
+init().then(() => setTimeout(init, 5000));
+setInterval(init, 60000);
+</script>
+</body>
+</html>

@@ -1,12 +1,12 @@
 {
   "name": "claude-warehouse",
   "description": "Developer analytics for AI-assisted coding. Every session captured, searchable, queryable. Understand your habits, track costs, improve your workflow.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "sderosiaux"
   },
   "homepage": "https://github.com/sderosiaux/claude-warehouse",
   "repository": "https://github.com/sderosiaux/claude-warehouse",
   "license": "MIT",
-  "keywords": ["analytics", "memory", "duckdb", "productivity", "costs", "search"]
+  "keywords": ["analytics", "memory", "duckdb", "productivity", "costs", "search", "dashboard"]
 }
