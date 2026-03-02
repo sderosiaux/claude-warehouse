@@ -35,6 +35,62 @@ No manual setup needed. The plugin automatically syncs your session data into Du
 
 For a manual full re-sync: `./scripts/sync.py --full -v`
 
+## Examples
+
+### Recall — natural language prompts
+
+```
+/claude-warehouse:recall authentication
+```
+> "Have I implemented JWT auth before? Show me what I did."
+
+```
+/claude-warehouse:recall CORS error
+```
+> "I hit this error last week — how did I fix it?"
+
+```
+/claude-warehouse:recall kafka consumer
+```
+> "Find every session where I worked on Kafka consumers."
+
+```
+/claude-warehouse:recall react table
+```
+> "I built a data table component recently — which project was it?"
+
+### Query — SQL power moves
+
+**What did I work on this week?**
+```
+/claude-warehouse:query SELECT project_name, COUNT(*) sessions, SUM(message_count) msgs FROM sessions WHERE created_at >= current_date - INTERVAL '7 days' GROUP BY 1 ORDER BY 2 DESC
+```
+
+**My most used tools across all sessions:**
+```
+/claude-warehouse:query SELECT tool_name, COUNT(*) calls FROM tool_calls GROUP BY 1 ORDER BY 2 DESC LIMIT 15
+```
+
+**Total tokens burned per project (last 30 days):**
+```
+/claude-warehouse:query SELECT project_name, SUM(total_input_tokens + total_output_tokens) as tokens FROM sessions WHERE created_at >= current_date - INTERVAL '30 days' GROUP BY 1 ORDER BY 2 DESC
+```
+
+**Find sessions where I used a specific tool:**
+```
+/claude-warehouse:query SELECT s.project_name, s.created_at::DATE, s.first_prompt FROM sessions s WHERE s.session_id IN (SELECT DISTINCT session_id FROM tool_calls WHERE tool_name = 'WebSearch') ORDER BY s.created_at DESC LIMIT 10
+```
+
+**Long sessions (most back-and-forth):**
+```
+/claude-warehouse:query SELECT project_name, created_at::DATE, message_count, LEFT(first_prompt, 80) prompt FROM sessions ORDER BY message_count DESC LIMIT 10
+```
+
+**Daily usage pattern:**
+```
+/claude-warehouse:query SELECT created_at::DATE as day, COUNT(*) sessions, SUM(message_count) msgs FROM sessions GROUP BY 1 ORDER BY 1 DESC LIMIT 14
+```
+
 ## Schema
 
 | Table | Description |
