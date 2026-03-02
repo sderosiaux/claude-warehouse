@@ -31,29 +31,9 @@ claude --plugin-dir /path/to/claude-warehouse
 
 ## Setup
 
-Sync your session data into DuckDB (run once, then periodically):
+No manual setup needed. The plugin automatically syncs your session data into DuckDB (`~/.claude/claude.duckdb`) at the start of every Claude Code session.
 
-```bash
-./scripts/sync.py -v
-```
-
-The database is created at `~/.claude/claude.duckdb`.
-
-For automatic sync, add a hook in your `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [{
-      "matcher": ".*",
-      "hooks": [{
-        "type": "command",
-        "command": "/path/to/claude-warehouse/scripts/sync.py"
-      }]
-    }]
-  }
-}
-```
+For a manual full re-sync: `./scripts/sync.py --full -v`
 
 ## Schema
 
