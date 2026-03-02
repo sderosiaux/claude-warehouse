@@ -1,11 +1,12 @@
 {
   "name": "claude-warehouse",
-  "description": "Long-term memory for Claude Code. Search and query across all past sessions via DuckDB.",
-  "version": "0.1.0",
+  "description": "Developer analytics for AI-assisted coding. Every session captured, searchable, queryable. Understand your habits, track costs, improve your workflow.",
+  "version": "0.2.0",
   "author": {
     "name": "sderosiaux"
   },
   "homepage": "https://github.com/sderosiaux/claude-warehouse",
   "repository": "https://github.com/sderosiaux/claude-warehouse",
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": ["analytics", "memory", "duckdb", "productivity", "costs", "search"]
 }
