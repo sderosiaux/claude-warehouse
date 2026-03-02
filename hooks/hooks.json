@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/sync.py",
-            "timeout": 30000
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/sync.py &",
+            "timeout": 5000
           }
         ]
       }
