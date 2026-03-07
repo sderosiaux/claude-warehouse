@@ -15,21 +15,23 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/query.py sql "$ARGUMENTS"
 ## Schema
 
 **sessions** — One row per session
-- `session_id`, `project_path`, `project_name`, `git_branch`, `version`, `cwd`
-- `created_at`, `modified_at`, `message_count`
+- `session_id` (PK), `project_path`, `project_name`, `git_branch`, `version`, `cwd`
+- `created_at` (TIMESTAMP), `modified_at` (TIMESTAMP), `message_count`
 - `total_input_tokens`, `total_output_tokens`, `total_cache_read`, `total_cache_write`
 - `tools_used` (JSON array), `models_used` (JSON array)
 - `first_prompt`, `file_path`
 - `is_subagent`, `parent_session_id`
 
 **messages** — Individual turns from session JSONL
-- `session_id`, `uuid`, `parent_uuid`, `type`, `timestamp`
+- `session_id`, `uuid` (PK with session_id), `parent_uuid`, `type`, `timestamp` (TIMESTAMP)
 - `is_sidechain`, `role`, `model`, `stop_reason`
 - `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`
 - `content_types` (JSON), `tool_name`, `tool_input_summary`, `text_content`
+- NOTE: NO `created_at` column — use `timestamp` or JOIN to sessions
 
 **tool_calls** — Extracted tool invocations
-- `session_id`, `message_uuid`, `tool_name`, `tool_input`, `timestamp`, `idx`
+- `session_id`, `message_uuid` (FK → messages.uuid), `tool_name`, `tool_input`, `timestamp` (TIMESTAMP), `idx`
+- NOTE: NO `created_at` column — use `timestamp` or JOIN to sessions
 
 **hook_events** — Hook event logs
 - `id`, `event_type`, `session_id`, `timestamp`, `cwd`, `tool_name`, `tool_input`, `file_path`
@@ -39,6 +41,16 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/query.py sql "$ARGUMENTS"
 
 **deleted_sessions** — Metadata from removed sessions
 - `session_id`, `project_path`, `project_name`, `git_branch`, `created_at`, `modified_at`, `message_count`, `first_prompt`, `summary`
+
+## Join paths
+
+```
+sessions.session_id  ←→  messages.session_id
+sessions.session_id  ←→  tool_calls.session_id
+messages.uuid        ←→  tool_calls.message_uuid   (NOT message_id)
+```
+
+**Ambiguous columns**: `tool_name` exists in BOTH messages and tool_calls — always qualify with table alias (e.g., `tc.tool_name`).
 
 ## Example queries
 

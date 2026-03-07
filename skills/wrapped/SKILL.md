@@ -8,6 +8,39 @@ Generate a fun, visual summary of the user's Claude Code activity. Think Spotify
 
 Run ALL queries below, then present as an engaging, shareable summary.
 
+## Schema reference (for adapting queries)
+
+When the user specifies a date range, add WHERE clauses. Use these join paths:
+
+```
+sessions.session_id  ←→  messages.session_id
+sessions.session_id  ←→  tool_calls.session_id
+messages.uuid        ←→  tool_calls.message_uuid   (NOT message_id)
+```
+
+Key column differences between tables:
+- **sessions**: `created_at` (TIMESTAMP), `modified_at`
+- **messages**: `timestamp` (TIMESTAMP) — NO created_at column
+- **tool_calls**: `timestamp` (TIMESTAMP) — NO created_at column
+- **Ambiguous columns**: `tool_name` exists in BOTH messages and tool_calls — always qualify with table alias
+
+To filter `tool_calls` or `messages` by date, JOIN through `sessions`:
+```sql
+-- tool_calls filtered by date:
+SELECT tc.tool_name, COUNT(*) uses
+FROM tool_calls tc
+JOIN sessions s ON tc.session_id = s.session_id
+WHERE s.created_at >= '...' AND s.created_at < '...'
+GROUP BY 1 ORDER BY 2 DESC
+
+-- messages filtered by date:
+SELECT model, COUNT(*) messages
+FROM messages m
+JOIN sessions s ON m.session_id = s.session_id
+WHERE model IS NOT NULL AND s.created_at >= '...' AND s.created_at < '...'
+GROUP BY 1 ORDER BY 2 DESC
+```
+
 ## Data collection
 
 ### All-time stats

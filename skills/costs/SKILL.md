@@ -8,6 +8,28 @@ Show token usage mapped to actual dollar amounts.
 
 Run ALL of the following queries and present a clear cost breakdown.
 
+## Schema reference (for adapting queries)
+
+When the user specifies a date range, add WHERE clauses. Use these join paths:
+
+```
+sessions.session_id  ←→  messages.session_id
+sessions.session_id  ←→  tool_calls.session_id
+messages.uuid        ←→  tool_calls.message_uuid   (NOT message_id)
+```
+
+Key column differences between tables:
+- **sessions**: `created_at` (TIMESTAMP), `modified_at`
+- **messages**: `timestamp` (TIMESTAMP) — NO created_at column
+- **tool_calls**: `timestamp` (TIMESTAMP) — NO created_at column
+- **Ambiguous columns**: `tool_name` exists in BOTH messages and tool_calls — always qualify with table alias
+
+To filter `tool_calls` or `messages` by date, JOIN through `sessions`:
+```sql
+SELECT tc.tool_name, COUNT(*) FROM tool_calls tc JOIN sessions s ON tc.session_id = s.session_id WHERE s.created_at >= '...' GROUP BY 1
+SELECT model, COUNT(*) FROM messages m JOIN sessions s ON m.session_id = s.session_id WHERE s.created_at >= '...' GROUP BY 1
+```
+
 ## Pricing reference (as of 2025)
 
 Use these rates for estimation:
