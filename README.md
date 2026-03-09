@@ -13,9 +13,58 @@ It syncs every session into a local DuckDB database. Search it, query it, visual
 /plugin install claude-warehouse@sderosiaux-claude-plugins
 ```
 
-That's it. Sync runs automatically at every session start. No config.
+That's it. The dashboard launches automatically at every session start.
 
 **Prerequisites**: [uv](https://docs.astral.sh/uv/) (DuckDB installs automatically via uv)
+
+### Background sync (recommended)
+
+Set up a launchd daemon to sync sessions every 10 minutes in the background:
+
+```bash
+cat > ~/Library/LaunchAgents/com.claude.warehouse.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.warehouse</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>timeout 240 uv run --script "$(claude info plugins-dir)/cache/sderosiaux-claude-plugins/claude-warehouse/*/scripts/sync.py" --verbose</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>ExitTimeOut</key>
+    <integer>300</integer>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-warehouse-sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-warehouse-sync.log</string>
+</dict>
+</plist>
+EOF
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude.warehouse.plist
+```
+
+You can also trigger a manual sync anytime:
+
+```bash
+uv run --script "$(claude info plugins-dir)/cache/sderosiaux-claude-plugins/claude-warehouse/*/scripts/sync.py" --verbose
+```
 
 ## What You Get
 
@@ -81,8 +130,10 @@ Full SQL access to the entire warehouse.
 
 ```
 SessionStart hook
-  ├── sync.py &      → incremental ETL into DuckDB
   └── dashboard.py & → HTTP server on :3141
+
+launchd (every 10min)
+  └── sync.py        → incremental ETL into DuckDB
 
 Browser → localhost:3141
   ├── GET /              → Chart.js single-page dashboard
