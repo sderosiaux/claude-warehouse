@@ -655,6 +655,55 @@ def sync_history(con: duckdb.DuckDBPyConnection, verbose: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# Purge
+# ---------------------------------------------------------------------------
+
+PURGE_AGE_DAYS = 7
+
+
+def purge_synced_files(con: duckdb.DuckDBPyConnection, verbose: bool = False):
+    """Delete JSONL files that are already in the warehouse and unmodified for 7+ days."""
+    projects_dir = CLAUDE_DIR / "projects"
+    if not projects_dir.exists():
+        return
+
+    cutoff = time.time() - PURGE_AGE_DAYS * 86400
+
+    # Get all synced session_ids (file_path stored in sessions table)
+    synced = set()
+    for row in con.execute("SELECT file_path FROM sessions").fetchall():
+        synced.add(row[0])
+
+    purged = 0
+    reclaimed = 0
+    skipped_not_synced = 0
+    skipped_too_recent = 0
+
+    for fp in projects_dir.rglob("*.jsonl"):
+        if not fp.is_file():
+            continue
+        st = fp.stat()
+        if st.st_mtime > cutoff:
+            skipped_too_recent += 1
+            continue
+        if str(fp) not in synced:
+            skipped_not_synced += 1
+            continue
+        reclaimed += st.st_size
+        fp.unlink()
+        purged += 1
+
+    # Clean up empty subagent/session directories
+    for d in sorted(projects_dir.rglob("*"), reverse=True):
+        if d.is_dir() and not any(d.iterdir()):
+            d.rmdir()
+
+    if verbose:
+        print(f"  Purge: {purged} files deleted ({reclaimed / 1048576:.1f} MB), "
+              f"{skipped_too_recent} too recent, {skipped_not_synced} not yet synced")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -664,6 +713,7 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--full", action="store_true", help="Reset watermarks and re-sync everything")
     parser.add_argument("--compact", action="store_true", help="Vacuum and checkpoint DB after sync")
+    parser.add_argument("--purge", action="store_true", help="Delete synced JSONL files not modified for 7+ days")
     parser.add_argument("--db", default=str(DB_PATH), help="Database path")
     args = parser.parse_args()
 
@@ -699,6 +749,9 @@ def main():
     _timed("todos", lambda: sync_todos(con, verbose=args.verbose))
     _timed("debug", lambda: sync_debug(con, verbose=args.verbose))
     _timed("history", lambda: sync_history(con, verbose=args.verbose))
+
+    if args.purge:
+        _timed("purge", lambda: purge_synced_files(con, verbose=args.verbose))
 
     if args.compact:
         if args.verbose:
