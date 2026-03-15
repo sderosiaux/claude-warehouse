@@ -249,10 +249,14 @@ def _ingest_jsonl(con: duckdb.DuckDBPyConnection, fp: Path, is_subagent: bool = 
     con.execute("DELETE FROM messages WHERE session_id = ?", [s_id])
     con.execute("DELETE FROM tool_calls WHERE session_id = ?", [s_id])
 
+    # Deduplicate: JSONL files can contain duplicate entries (retries, replayed events).
+    # Keep last occurrence per key since it has the most up-to-date data.
     if messages:
-        con.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", messages)
+        deduped = {(m[0], m[1]): m for m in messages}  # key: (session_id, uuid)
+        con.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", list(deduped.values()))
     if tool_calls_batch:
-        con.executemany("INSERT INTO tool_calls VALUES (?,?,?,?,?,?)", tool_calls_batch)
+        deduped_tc = {(t[0], t[1], t[5]): t for t in tool_calls_batch}  # key: (session_id, message_uuid, idx)
+        con.executemany("INSERT INTO tool_calls VALUES (?,?,?,?,?,?)", list(deduped_tc.values()))
 
     return s_id, len(messages)
 
