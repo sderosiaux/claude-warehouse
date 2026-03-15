@@ -48,9 +48,12 @@ def newer_files(directory: Path, watermark: float, suffix: str = "", recurse: bo
     files = []
     glob_pat = f"**/*{suffix}" if recurse else f"*{suffix}"
     for p in directory.glob(glob_pat):
-        if p.is_file() and p.stat().st_mtime > watermark:
-            files.append(p)
-    return sorted(files, key=lambda p: p.stat().st_mtime)
+        if p.is_file():
+            mtime = p.stat().st_mtime
+            if mtime > watermark:
+                files.append((mtime, p))
+    files.sort(key=lambda x: x[0])
+    return [p for _, p in files]
 
 
 def truncate(s: str | None, maxlen: int = 500) -> str | None:
@@ -261,22 +264,38 @@ def _ingest_jsonl(con: duckdb.DuckDBPyConnection, fp: Path, is_subagent: bool = 
     return s_id, len(messages)
 
 
-def sync_sessions(con: duckdb.DuckDBPyConnection, session_id_filter: str | None = None, verbose: bool = False):
+def _scan_jsonl_files(projects_dir: Path, session_wm: float, subagent_wm: float):
+    """Single rglob scan, partitioned into sessions and subagents with cached mtimes."""
+    sessions = []
+    subagents = []
+    for p in projects_dir.rglob("*.jsonl"):
+        if not p.is_file():
+            continue
+        mtime = p.stat().st_mtime
+        is_sub = "/subagents/" in str(p)
+        if is_sub and mtime > subagent_wm:
+            subagents.append((mtime, p))
+        elif not is_sub and mtime > session_wm:
+            sessions.append((mtime, p))
+    sessions.sort(key=lambda x: x[0])
+    subagents.sort(key=lambda x: x[0])
+    return sessions, subagents
+
+
+def sync_sessions(con: duckdb.DuckDBPyConnection, session_files: list[tuple[float, Path]],
+                  session_id_filter: str | None = None, verbose: bool = False):
     wm = get_watermark(con, "sessions")
-    projects_dir = CLAUDE_DIR / "projects"
-    if not projects_dir.exists():
-        return
 
     if session_id_filter:
+        projects_dir = CLAUDE_DIR / "projects"
         candidates = list(projects_dir.rglob(f"{session_id_filter}.jsonl"))
-        files = [f for f in candidates if "subagents" not in str(f)]
+        files = [(f.stat().st_mtime, f) for f in candidates if "/subagents/" not in str(f)]
         if not files:
             if verbose:
                 print(f"  Session {session_id_filter} not found")
             return
     else:
-        files = newer_files(projects_dir, wm, ".jsonl", recurse=True)
-        files = [f for f in files if "subagents" not in str(f)]
+        files = session_files
 
     if verbose:
         print(f"  Sessions: {len(files)} files to process")
@@ -284,8 +303,8 @@ def sync_sessions(con: duckdb.DuckDBPyConnection, session_id_filter: str | None 
     max_mtime = wm
     total_rows = 0
 
-    for fp in files:
-        max_mtime = max(max_mtime, fp.stat().st_mtime)
+    for mtime, fp in files:
+        max_mtime = max(max_mtime, mtime)
         result = _ingest_jsonl(con, fp, is_subagent=False)
         if result:
             total_rows += result[1]
@@ -293,28 +312,17 @@ def sync_sessions(con: duckdb.DuckDBPyConnection, session_id_filter: str | None 
     set_watermark(con, "sessions", max_mtime, len(files), total_rows)
 
 
-def sync_subagents(con: duckdb.DuckDBPyConnection, verbose: bool = False):
-    wm = get_watermark(con, "subagents")
-    projects_dir = CLAUDE_DIR / "projects"
-    if not projects_dir.exists():
-        return
-
-    # Find all subagent JSONL files
-    all_sub = []
-    for p in projects_dir.rglob("*.jsonl"):
-        if "subagents" in str(p) and p.is_file() and p.stat().st_mtime > wm:
-            all_sub.append(p)
-    all_sub.sort(key=lambda p: p.stat().st_mtime)
-
+def sync_subagents(con: duckdb.DuckDBPyConnection, subagent_files: list[tuple[float, Path]],
+                   verbose: bool = False):
     if verbose:
-        print(f"  Subagents: {len(all_sub)} files to process")
+        print(f"  Subagents: {len(subagent_files)} files to process")
 
+    wm = get_watermark(con, "subagents")
     max_mtime = wm
     total_rows = 0
 
-    for fp in all_sub:
-        max_mtime = max(max_mtime, fp.stat().st_mtime)
-        # parent session = the directory name above subagents/
+    for mtime, fp in subagent_files:
+        max_mtime = max(max_mtime, mtime)
         parent_dir = fp.parent.parent.name
         parent_sid = parent_dir if parent_dir != "subagents" else None
 
@@ -322,7 +330,7 @@ def sync_subagents(con: duckdb.DuckDBPyConnection, verbose: bool = False):
         if result:
             total_rows += result[1]
 
-    set_watermark(con, "subagents", max_mtime, len(all_sub), total_rows)
+    set_watermark(con, "subagents", max_mtime, len(subagent_files), total_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -420,24 +428,24 @@ def sync_hook_events(con: duckdb.DuckDBPyConnection, verbose: bool = False):
 
         wm_key = f"hooks_{log_stem}"
         wm = get_watermark(con, wm_key)
-        current_mtime = log_file.stat().st_mtime
+        current_size = log_file.stat().st_size
 
-        if current_mtime <= wm:
+        # Use file size as watermark — skip if file hasn't grown
+        if current_size <= wm:
             continue
 
-        # Count existing rows for this file to know where to resume
+        # Get line count to continue numbering
         existing = con.execute(
-            "SELECT COUNT(*) FROM hook_events WHERE file_path = ?", [str(log_file)]
+            "SELECT COALESCE(MAX(id), 0) FROM hook_events WHERE file_path = ?", [str(log_file)]
         ).fetchone()[0]
 
         rows = []
-        line_idx = 0
+        line_idx = existing
         with open(log_file, errors="replace") as f:
+            # Seek past already-processed bytes
+            if wm > 0:
+                f.seek(int(wm))
             for line in f:
-                line_idx += 1
-                if line_idx <= existing:
-                    continue
-
                 line = line.strip()
                 if not line:
                     continue
@@ -446,6 +454,7 @@ def sync_hook_events(con: duckdb.DuckDBPyConnection, verbose: bool = False):
                 if not m:
                     continue
 
+                line_idx += 1
                 ts_str, payload = m.group(1), m.group(2)
                 try:
                     ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
@@ -464,7 +473,6 @@ def sync_hook_events(con: duckdb.DuckDBPyConnection, verbose: bool = False):
                     tool_name = data.get("tool_name")
                     tool_input = data.get("tool_input")
                 except json.JSONDecodeError:
-                    # Non-JSON log lines (e.g. adversarial logs may have plain text)
                     pass
 
                 rows.append((
@@ -484,7 +492,7 @@ def sync_hook_events(con: duckdb.DuckDBPyConnection, verbose: bool = False):
         if verbose:
             print(f"  Hooks [{event_type}]: +{len(rows)} events")
 
-        set_watermark(con, wm_key, current_mtime, 1, len(rows))
+        set_watermark(con, wm_key, float(current_size), 1, len(rows))
 
 
 # ---------------------------------------------------------------------------
@@ -655,6 +663,7 @@ def main():
     parser.add_argument("--session", help="Sync only this session ID")
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--full", action="store_true", help="Reset watermarks and re-sync everything")
+    parser.add_argument("--compact", action="store_true", help="Vacuum and checkpoint DB after sync")
     parser.add_argument("--db", default=str(DB_PATH), help="Database path")
     args = parser.parse_args()
 
@@ -670,13 +679,32 @@ def main():
     if args.verbose:
         print(f"Syncing to {args.db}")
 
-    sync_sessions(con, session_id_filter=args.session, verbose=args.verbose)
-    sync_subagents(con, verbose=args.verbose)
-    sync_deleted_sessions(con, verbose=args.verbose)
-    sync_hook_events(con, verbose=args.verbose)
-    sync_todos(con, verbose=args.verbose)
-    sync_debug(con, verbose=args.verbose)
-    sync_history(con, verbose=args.verbose)
+    projects_dir = CLAUDE_DIR / "projects"
+    session_files, subagent_files = [], []
+    if projects_dir.exists():
+        session_wm = get_watermark(con, "sessions")
+        subagent_wm = get_watermark(con, "subagents")
+        session_files, subagent_files = _scan_jsonl_files(projects_dir, session_wm, subagent_wm)
+
+    def _timed(name, fn):
+        t = time.time()
+        fn()
+        if args.verbose:
+            print(f"    [{time.time() - t:.2f}s]")
+
+    _timed("sessions", lambda: sync_sessions(con, session_files, session_id_filter=args.session, verbose=args.verbose))
+    _timed("subagents", lambda: sync_subagents(con, subagent_files, verbose=args.verbose))
+    _timed("deleted", lambda: sync_deleted_sessions(con, verbose=args.verbose))
+    _timed("hooks", lambda: sync_hook_events(con, verbose=args.verbose))
+    _timed("todos", lambda: sync_todos(con, verbose=args.verbose))
+    _timed("debug", lambda: sync_debug(con, verbose=args.verbose))
+    _timed("history", lambda: sync_history(con, verbose=args.verbose))
+
+    if args.compact:
+        if args.verbose:
+            print("  Compacting database...")
+        con.execute("CHECKPOINT")
+        con.execute("VACUUM")
 
     con.close()
 
