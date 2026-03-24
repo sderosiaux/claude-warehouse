@@ -257,6 +257,34 @@ def cmd_hooks(con: duckdb.DuckDBPyConnection, args):
     print_table(rows, ["Event", "Count", "Sessions", "First", "Last"])
 
 
+def cmd_vsearch(con: duckdb.DuckDBPyConnection, args):
+    """Delegate to vsearch.py (heavy deps loaded only when needed)."""
+    import subprocess
+    q = args.query
+    if not q:
+        print("Usage: cw vsearch <query>", file=sys.stderr)
+        sys.exit(1)
+    con.close()
+    candidates = [
+        Path.home() / "code/personal/claude-warehouse/scripts/vsearch.py",
+        *sorted(Path.home().glob(".claude/plugins/cache/*/claude-warehouse/*/scripts/vsearch.py"), reverse=True),
+    ]
+    vsearch = next((p for p in candidates if p.exists()), None)
+    if not vsearch:
+        print("vsearch.py not found. Install claude-warehouse plugin.", file=sys.stderr)
+        sys.exit(1)
+    cmd = ["uv", "run", "--script", str(vsearch), q, "--db", args.db]
+    if getattr(args, "project", None):
+        cmd += ["--project", args.project]
+    if getattr(args, "days", None):
+        cmd += ["--days", str(args.days)]
+    if getattr(args, "vtype", None):
+        cmd += ["--type", args.vtype]
+    if getattr(args, "limit", None):
+        cmd += ["--limit", str(args.limit)]
+    sys.exit(subprocess.call(cmd))
+
+
 def cmd_sql(con: duckdb.DuckDBPyConnection, args):
     query = args.query
     if not query:
@@ -297,6 +325,13 @@ def main():
     p_hooks = sub.add_parser("hooks", help="Hook event summary")
     p_hooks.add_argument("--days", "-d", type=int, default=7)
 
+    p_vsearch = sub.add_parser("vsearch", help="Semantic vector search")
+    p_vsearch.add_argument("query", nargs="?")
+    p_vsearch.add_argument("--project", "-p")
+    p_vsearch.add_argument("--days", "-d", type=int)
+    p_vsearch.add_argument("--type", "-t", dest="vtype", choices=["message", "session", "research"])
+    p_vsearch.add_argument("--limit", "-n", type=int)
+
     p_sql = sub.add_parser("sql", help="Run raw SQL")
     p_sql.add_argument("query", nargs="?")
 
@@ -316,6 +351,7 @@ def main():
         "projects": cmd_projects,
         "size": cmd_size,
         "hooks": cmd_hooks,
+        "vsearch": cmd_vsearch,
         "sql": cmd_sql,
     }
 
