@@ -15,7 +15,7 @@ It syncs every session into a local DuckDB database. Search it, query it, visual
 
 That's it. The dashboard launches automatically at every session start.
 
-**Prerequisites**: [uv](https://docs.astral.sh/uv/) (DuckDB installs automatically via uv)
+**Prerequisites**: [uv](https://docs.astral.sh/uv/) (DuckDB and sentence-transformers install automatically via uv)
 
 ### Background sync (recommended)
 
@@ -92,6 +92,16 @@ You ask Claude naturally. It searches your history.
 - "Which project had the Kafka consumer work?" → searches for `kafka consumer`
 - "I built a data table component recently" → searches for `react table`
 
+**Semantic search** (v0.4.0): When keyword search isn't enough, recall falls back to vector similarity — finding related concepts even when the exact words don't match. Powered by local embeddings (sentence-transformers, no API calls), stored in DuckDB with HNSW indexing.
+
+```bash
+# Keyword search (exact match)
+/claude-warehouse:recall CORS error
+
+# Semantic search (meaning-based, finds related concepts)
+vsearch.py "how to debug a performance issue" --project myapp --days 30
+```
+
 ### Report — understand how you use AI
 
 Zero-effort analytics on your AI-assisted development habits.
@@ -133,7 +143,8 @@ SessionStart hook
   └── dashboard.py & → HTTP server on :3141
 
 launchd (every 10min)
-  └── sync.py        → incremental ETL into DuckDB
+  ├── sync.py        → incremental ETL into DuckDB
+  └── embed.py       → incremental vector embeddings (sentence-transformers)
 
 Browser → localhost:3141
   ├── GET /              → Chart.js single-page dashboard
@@ -251,6 +262,7 @@ FROM sessions GROUP BY 1 ORDER BY 1 DESC LIMIT 14
 | `tool_calls` | Every tool invocation — name, input, timestamp |
 | `hook_events` | Hook event logs |
 | `research_history` | Research/review artifacts |
+| `embeddings` | Vector embeddings for semantic search (FLOAT[384], HNSW indexed) |
 | `deleted_sessions` | Metadata from removed sessions |
 | `todos` | Task items from sessions |
 | `debug_logs` | Debug log metadata |

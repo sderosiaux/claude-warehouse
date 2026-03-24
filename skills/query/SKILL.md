@@ -39,6 +39,10 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/query.py sql "$ARGUMENTS"
 **research_history** — Research/review artifacts
 - `file_path`, `category`, `agent`, `timestamp`, `description`, `content`
 
+**embeddings** — Vector embeddings for semantic search
+- `source_type` ('message'|'session'|'research'), `source_id`, `chunk_idx`, `text_preview`, `embedding` (FLOAT[384])
+- source_id encoding: `session_id:uuid` for messages, `session_id` for sessions, `file_path` for research
+
 **deleted_sessions** — Metadata from removed sessions
 - `session_id`, `project_path`, `project_name`, `git_branch`, `created_at`, `modified_at`, `message_count`, `first_prompt`, `summary`
 

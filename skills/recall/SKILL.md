@@ -15,11 +15,16 @@ Search across all past Claude Code sessions stored in the local DuckDB warehouse
 
 ## How to search
 
-Run the search script. It queries messages, session metadata, and research history.
-
+### Keyword search (exact substring match)
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/scripts/query.py search "$ARGUMENTS"
 ```
+
+### Semantic search (meaning-based, finds related concepts)
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/vsearch.py "$ARGUMENTS"
+```
+Use semantic search when keyword search returns no results, or when searching for concepts/approaches rather than exact terms. Supports filters: `--project X`, `--days N`, `--type message|session|research`, `--limit N`.
 
 ## Interpreting results
 

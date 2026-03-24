@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS debug_logs (
     size_bytes  BIGINT
 );
 
+-- Vector embeddings for semantic search
+CREATE TABLE IF NOT EXISTS embeddings (
+    source_type     VARCHAR NOT NULL,   -- 'message' | 'session' | 'research'
+    source_id       VARCHAR NOT NULL,   -- session_id:uuid | session_id | file_path
+    chunk_idx       INTEGER DEFAULT 0,
+    text_preview    VARCHAR,
+    embedding       FLOAT[384],
+    PRIMARY KEY (source_type, source_id, chunk_idx)
+);
+
 -- Research/review history from history/**/*.md
 CREATE TABLE IF NOT EXISTS research_history (
     file_path   VARCHAR PRIMARY KEY,
