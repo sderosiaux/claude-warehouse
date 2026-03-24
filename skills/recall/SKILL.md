@@ -1,5 +1,5 @@
 ---
-description: Search across all past Claude Code sessions. Use when you need to recall previous work, find solutions to problems you've solved before, or retrieve context from past conversations. Powered by DuckDB full-text search over session history.
+description: Search across all past Claude Code sessions. Use when you need to recall previous work, find solutions to problems you've solved before, or retrieve context from past conversations. Powered by DuckDB keyword search and semantic vector search over session history.
 ---
 
 # Recall — Cross-Session Memory
@@ -15,27 +15,29 @@ Search across all past Claude Code sessions stored in the local DuckDB warehouse
 
 ## How to search
 
-### Keyword search (exact substring match)
+Always run BOTH searches — they complement each other.
+
+### 1. Keyword search (exact substring match)
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/scripts/query.py search "$ARGUMENTS"
 ```
 
-### Semantic search (meaning-based, finds related concepts)
+### 2. Semantic search (meaning-based, finds related concepts)
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/scripts/vsearch.py "$ARGUMENTS"
 ```
-Use semantic search when keyword search returns no results, or when searching for concepts/approaches rather than exact terms. Supports filters: `--project X`, `--days N`, `--type message|session|research`, `--limit N`.
+Finds results even when exact words don't match. Supports filters: `--project X`, `--days N`, `--type message|session|research`, `--limit N`.
 
 ## Interpreting results
 
-The search returns:
-- **Messages**: matching text from past conversations (with session ID, project, timestamp)
-- **Research history**: matching entries from research/review artifacts
+**Keyword** returns exact substring matches — high precision, low recall.
+**Semantic** returns conceptually similar content — lower precision, high recall. Score > 0.7 = strong match, 0.5-0.7 = related.
 
-Use the session ID to dig deeper with `/claude-warehouse:query` if needed.
+Combine both to get a complete picture. Use session IDs to dig deeper with `/claude-warehouse:query`.
 
 ## Tips
 
 - Search for error messages, library names, patterns, concepts
-- Use short, specific terms for best results
+- Use short, specific terms for keyword search
+- Use natural language descriptions for semantic search
 - Combine with `/claude-warehouse:query` for complex lookups (e.g., "all sessions in project X that used tool Y")
