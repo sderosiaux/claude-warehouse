@@ -10,6 +10,15 @@ CREATE TABLE IF NOT EXISTS _sync_state (
     rows_synced  BIGINT DEFAULT 0
 );
 
+-- Per-file byte offsets for tail-only JSONL ingest (sessions/subagents)
+CREATE TABLE IF NOT EXISTS _file_offsets (
+    file_path   VARCHAR PRIMARY KEY,
+    byte_offset BIGINT,       -- next byte to read on resume
+    file_size   BIGINT,       -- file size at last sync (truncation detector)
+    mtime       DOUBLE,
+    last_run    TIMESTAMP DEFAULT current_timestamp
+);
+
 -- Session-level aggregates from projects/*.jsonl
 CREATE TABLE IF NOT EXISTS sessions (
     session_id          VARCHAR PRIMARY KEY,

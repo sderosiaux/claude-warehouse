@@ -42,6 +42,28 @@ def set_watermark(con: duckdb.DuckDBPyConnection, source: str, mtime: float, fil
     """, [source, mtime, files, rows])
 
 
+def get_file_offset(con: duckdb.DuckDBPyConnection, file_path: str) -> tuple[int, int]:
+    """Return (byte_offset, file_size_at_last_sync) for a file. (0, 0) if unseen."""
+    r = con.execute(
+        "SELECT byte_offset, file_size FROM _file_offsets WHERE file_path = ?",
+        [file_path],
+    ).fetchone()
+    return (r[0], r[1]) if r else (0, 0)
+
+
+def set_file_offset(con: duckdb.DuckDBPyConnection, file_path: str, byte_offset: int,
+                    file_size: int, mtime: float):
+    con.execute("""
+        INSERT INTO _file_offsets (file_path, byte_offset, file_size, mtime, last_run)
+        VALUES (?, ?, ?, ?, current_timestamp)
+        ON CONFLICT (file_path) DO UPDATE SET
+            byte_offset = excluded.byte_offset,
+            file_size = excluded.file_size,
+            mtime = excluded.mtime,
+            last_run = excluded.last_run
+    """, [file_path, byte_offset, file_size, mtime])
+
+
 def newer_files(directory: Path, watermark: float, suffix: str = "", recurse: bool = False) -> list[Path]:
     if not directory.exists():
         return []
@@ -90,8 +112,12 @@ def extract_first_prompt(content) -> str | None:
 
 
 def _ingest_jsonl(con: duckdb.DuckDBPyConnection, fp: Path, is_subagent: bool = False,
-                  parent_session_id: str | None = None):
-    """Parse a single JSONL file into sessions/messages/tool_calls. Returns (session_id, msg_count) or None."""
+                  parent_session_id: str | None = None, start_offset: int = 0):
+    """Parse a JSONL file (or its tail from start_offset) into sessions/messages/tool_calls.
+
+    Returns (session_id, msg_count, new_offset) or (None, 0, new_offset).
+    new_offset = file size at end of read; persist it as the next start_offset.
+    """
     sid = fp.stem
     project_dir = fp.parent.name
     # For subagents, use filename as unique key since they share parent's sessionId
@@ -99,6 +125,20 @@ def _ingest_jsonl(con: duckdb.DuckDBPyConnection, fp: Path, is_subagent: bool = 
     if is_subagent:
         project_dir = fp.parent.parent.parent.name
         override_sid = fp.stem  # e.g. "agent-a512e64"
+
+    try:
+        file_size = fp.stat().st_size
+    except OSError:
+        return None, 0, start_offset
+
+    # Truncation guard: file shrank → re-ingest from 0
+    if start_offset > file_size:
+        start_offset = 0
+    is_full = (start_offset == 0)
+
+    # Nothing new to read
+    if start_offset == file_size:
+        return None, 0, file_size
 
     messages = []
     tool_calls_batch = []
@@ -110,6 +150,8 @@ def _ingest_jsonl(con: duckdb.DuckDBPyConnection, fp: Path, is_subagent: bool = 
 
     try:
         with open(fp) as f:
+            if start_offset:
+                f.seek(start_offset)
             for line in f:
                 line = line.strip()
                 if not line:
@@ -208,14 +250,11 @@ def _ingest_jsonl(con: duckdb.DuckDBPyConnection, fp: Path, is_subagent: bool = 
                     truncate(text_content, 2000),
                 ))
     except Exception:
-        return None
+        return None, 0, start_offset
 
     if not messages:
-        return None
+        return None, 0, file_size
 
-    timestamps = [m[4] for m in messages if m[4]]
-    created = min(timestamps) if timestamps else None
-    modified = max(timestamps) if timestamps else None
     s_id = override_sid or session_meta.get("session_id", sid)
 
     # Rewrite session_id in messages and tool_calls to use s_id
@@ -223,45 +262,88 @@ def _ingest_jsonl(con: duckdb.DuckDBPyConnection, fp: Path, is_subagent: bool = 
         messages = [(s_id, *m[1:]) for m in messages]
         tool_calls_batch = [(s_id, *t[1:]) for t in tool_calls_batch]
 
-    con.execute("""
-        INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT (session_id) DO UPDATE SET
-            modified_at = excluded.modified_at,
-            message_count = excluded.message_count,
-            total_input_tokens = excluded.total_input_tokens,
-            total_output_tokens = excluded.total_output_tokens,
-            total_cache_read = excluded.total_cache_read,
-            total_cache_write = excluded.total_cache_write,
-            tools_used = excluded.tools_used,
-            models_used = excluded.models_used,
-            first_prompt = excluded.first_prompt
-    """, [
-        s_id, str(fp.parent), project_dir,
-        session_meta.get("git_branch"),
-        session_meta.get("version"),
-        session_meta.get("cwd"),
-        created, modified, len(messages),
-        token_totals["input"], token_totals["output"],
-        token_totals["cache_read"], token_totals["cache_write"],
-        json.dumps(sorted(tools_seen)),
-        json.dumps(sorted(models_seen)),
-        first_user_prompt, str(fp),
-        is_subagent, parent_session_id,
-    ])
+    if is_full:
+        # First-time ingest: insert session row with Python-computed aggregates.
+        timestamps = [m[4] for m in messages if m[4]]
+        created = min(timestamps) if timestamps else None
+        modified = max(timestamps) if timestamps else None
+        con.execute("""
+            INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT (session_id) DO UPDATE SET
+                modified_at = excluded.modified_at,
+                message_count = excluded.message_count,
+                total_input_tokens = excluded.total_input_tokens,
+                total_output_tokens = excluded.total_output_tokens,
+                total_cache_read = excluded.total_cache_read,
+                total_cache_write = excluded.total_cache_write,
+                tools_used = excluded.tools_used,
+                models_used = excluded.models_used,
+                first_prompt = excluded.first_prompt
+        """, [
+            s_id, str(fp.parent), project_dir,
+            session_meta.get("git_branch"),
+            session_meta.get("version"),
+            session_meta.get("cwd"),
+            created, modified, len(messages),
+            token_totals["input"], token_totals["output"],
+            token_totals["cache_read"], token_totals["cache_write"],
+            json.dumps(sorted(tools_seen)),
+            json.dumps(sorted(models_seen)),
+            first_user_prompt, str(fp),
+            is_subagent, parent_session_id,
+        ])
 
-    con.execute("DELETE FROM messages WHERE session_id = ?", [s_id])
-    con.execute("DELETE FROM tool_calls WHERE session_id = ?", [s_id])
-
-    # Deduplicate: JSONL files can contain duplicate entries (retries, replayed events).
-    # Keep last occurrence per key since it has the most up-to-date data.
-    if messages:
-        deduped = {(m[0], m[1]): m for m in messages}  # key: (session_id, uuid)
-        con.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", list(deduped.values()))
+    # UPSERT (not DELETE+INSERT) — JSONL is append-only, UUIDs are stable.
+    # DELETE+INSERT made every re-sync of an active session churn all its rows,
+    # which DuckDB's MVCC storage never reclaims (file grows unbounded).
+    # Python-side dedup kept as defense against duplicate retries within one file.
+    deduped = {(m[0], m[1]): m for m in messages}  # key: (session_id, uuid)
+    con.executemany("""
+        INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT (session_id, uuid) DO UPDATE SET
+            parent_uuid = excluded.parent_uuid,
+            type = excluded.type,
+            timestamp = excluded.timestamp,
+            is_sidechain = excluded.is_sidechain,
+            role = excluded.role,
+            model = excluded.model,
+            stop_reason = excluded.stop_reason,
+            input_tokens = excluded.input_tokens,
+            output_tokens = excluded.output_tokens,
+            cache_read_tokens = excluded.cache_read_tokens,
+            cache_write_tokens = excluded.cache_write_tokens,
+            content_types = excluded.content_types,
+            tool_name = excluded.tool_name,
+            tool_input_summary = excluded.tool_input_summary,
+            text_content = excluded.text_content
+    """, list(deduped.values()))
     if tool_calls_batch:
         deduped_tc = {(t[0], t[1], t[5]): t for t in tool_calls_batch}  # key: (session_id, message_uuid, idx)
-        con.executemany("INSERT INTO tool_calls VALUES (?,?,?,?,?,?)", list(deduped_tc.values()))
+        con.executemany("""
+            INSERT INTO tool_calls VALUES (?,?,?,?,?,?)
+            ON CONFLICT (session_id, message_uuid, idx) DO UPDATE SET
+                tool_name = excluded.tool_name,
+                tool_input = excluded.tool_input,
+                timestamp = excluded.timestamp
+        """, list(deduped_tc.values()))
 
-    return s_id, len(messages)
+    if not is_full:
+        # Tail ingest: refresh session aggregates from messages table in one SQL pass.
+        # created_at, cwd, git_branch, version, first_prompt stay as set on first ingest.
+        con.execute("""
+            UPDATE sessions SET
+                modified_at         = (SELECT max(timestamp)            FROM messages WHERE session_id = ?),
+                message_count       = (SELECT count(*)                  FROM messages WHERE session_id = ?),
+                total_input_tokens  = (SELECT coalesce(sum(input_tokens),       0) FROM messages WHERE session_id = ?),
+                total_output_tokens = (SELECT coalesce(sum(output_tokens),      0) FROM messages WHERE session_id = ?),
+                total_cache_read    = (SELECT coalesce(sum(cache_read_tokens),  0) FROM messages WHERE session_id = ?),
+                total_cache_write   = (SELECT coalesce(sum(cache_write_tokens), 0) FROM messages WHERE session_id = ?),
+                tools_used          = (SELECT to_json(list_sort(list_distinct(array_agg(tool_name)))) FROM messages WHERE session_id = ? AND tool_name IS NOT NULL),
+                models_used         = (SELECT to_json(list_sort(list_distinct(array_agg(model))))     FROM messages WHERE session_id = ? AND model      IS NOT NULL)
+            WHERE session_id = ?
+        """, [s_id] * 9)
+
+    return s_id, len(messages), file_size
 
 
 def _scan_jsonl_files(projects_dir: Path, session_wm: float, subagent_wm: float):
@@ -305,9 +387,11 @@ def sync_sessions(con: duckdb.DuckDBPyConnection, session_files: list[tuple[floa
 
     for mtime, fp in files:
         max_mtime = max(max_mtime, mtime)
-        result = _ingest_jsonl(con, fp, is_subagent=False)
-        if result:
-            total_rows += result[1]
+        fp_str = str(fp)
+        offset, _ = get_file_offset(con, fp_str)
+        _, n_rows, new_offset = _ingest_jsonl(con, fp, is_subagent=False, start_offset=offset)
+        total_rows += n_rows
+        set_file_offset(con, fp_str, new_offset, new_offset, mtime)
 
     set_watermark(con, "sessions", max_mtime, len(files), total_rows)
 
@@ -326,9 +410,13 @@ def sync_subagents(con: duckdb.DuckDBPyConnection, subagent_files: list[tuple[fl
         parent_dir = fp.parent.parent.name
         parent_sid = parent_dir if parent_dir != "subagents" else None
 
-        result = _ingest_jsonl(con, fp, is_subagent=True, parent_session_id=parent_sid)
-        if result:
-            total_rows += result[1]
+        fp_str = str(fp)
+        offset, _ = get_file_offset(con, fp_str)
+        _, n_rows, new_offset = _ingest_jsonl(
+            con, fp, is_subagent=True, parent_session_id=parent_sid, start_offset=offset,
+        )
+        total_rows += n_rows
+        set_file_offset(con, fp_str, new_offset, new_offset, mtime)
 
     set_watermark(con, "subagents", max_mtime, len(subagent_files), total_rows)
 
@@ -691,6 +779,7 @@ def purge_synced_files(con: duckdb.DuckDBPyConnection, verbose: bool = False):
             continue
         reclaimed += st.st_size
         fp.unlink()
+        con.execute("DELETE FROM _file_offsets WHERE file_path = ?", [str(fp)])
         purged += 1
 
     # Clean up empty subagent/session directories
@@ -704,6 +793,65 @@ def purge_synced_files(con: duckdb.DuckDBPyConnection, verbose: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# Rebuild (EXPORT/IMPORT to reclaim dead pages)
+# ---------------------------------------------------------------------------
+
+def rebuild_db(db_path: Path, verbose: bool = False):
+    """Compact a DuckDB file by EXPORT/IMPORT — reclaims pages DuckDB's MVCC
+    storage never frees. Safe: keeps a .bak until the new file is verified."""
+    import shutil, tempfile
+
+    if not db_path.exists():
+        raise SystemExit(f"DB not found: {db_path}")
+
+    before = db_path.stat().st_size
+    if verbose:
+        print(f"Rebuild: {db_path} ({before / 1_073_741_824:.2f} GB)")
+
+    export_dir = Path(tempfile.mkdtemp(prefix="duckdb_export_"))
+    new_path = db_path.with_suffix(".duckdb.new")
+    bak_path = db_path.with_suffix(".duckdb.bak")
+
+    try:
+        t = time.time()
+        con = duckdb.connect(str(db_path))
+        con.execute(f"EXPORT DATABASE '{export_dir}' (FORMAT PARQUET)")
+        con.close()
+        if verbose:
+            print(f"  EXPORT: {time.time() - t:.1f}s")
+
+        if new_path.exists():
+            new_path.unlink()
+        t = time.time()
+        con = duckdb.connect(str(new_path))
+        # vss extension needed for HNSW index on embeddings table.
+        # hnsw_enable_experimental_persistence required to recreate the index on disk.
+        try:
+            con.execute("INSTALL vss; LOAD vss;")
+            con.execute("SET hnsw_enable_experimental_persistence = true;")
+        except Exception:
+            pass
+        con.execute(f"IMPORT DATABASE '{export_dir}'")
+        con.execute("CHECKPOINT")
+        con.close()
+        if verbose:
+            print(f"  IMPORT: {time.time() - t:.1f}s")
+
+        if bak_path.exists():
+            bak_path.unlink()
+        db_path.rename(bak_path)
+        new_path.rename(db_path)
+
+        after = db_path.stat().st_size
+        if verbose:
+            ratio = before / after if after else 0
+            print(f"Rebuild done: {after / 1_073_741_824:.2f} GB "
+                  f"({ratio:.1f}× smaller, backup at {bak_path})")
+    finally:
+        shutil.rmtree(export_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -713,9 +861,14 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--full", action="store_true", help="Reset watermarks and re-sync everything")
     parser.add_argument("--compact", action="store_true", help="Vacuum and checkpoint DB after sync")
+    parser.add_argument("--rebuild", action="store_true", help="Compact DB by EXPORT+IMPORT (reclaims dead pages, no sync)")
     parser.add_argument("--purge", action="store_true", help="Delete synced JSONL files not modified for 7+ days")
     parser.add_argument("--db", default=str(DB_PATH), help="Database path")
     args = parser.parse_args()
+
+    if args.rebuild:
+        rebuild_db(Path(args.db), verbose=args.verbose)
+        return
 
     t0 = time.time()
     con = duckdb.connect(args.db)
@@ -723,6 +876,7 @@ def main():
 
     if args.full:
         con.execute("DELETE FROM _sync_state")
+        con.execute("DELETE FROM _file_offsets")
         if args.verbose:
             print("Reset all watermarks for full re-sync")
 
