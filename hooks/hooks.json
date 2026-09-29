@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/dashboard.py &",
+            "command": "nohup \"${CLAUDE_PLUGIN_ROOT}/scripts/dashboard.py\" >/dev/null 2>&1 &",
             "timeout": 5000
           }
         ]
